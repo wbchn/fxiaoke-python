@@ -1,0 +1,3 @@
+
+class baseObj(object):
+    pass
