@@ -22,12 +22,12 @@ class FxiaokeSession(object):
         self.corpId = None
         self.token_expired = 0
 
-        params = {
-            'access_token': self.access_token
-        }
-        if app_secret:
-            params['appsecret_proof'] = self._gen_appsecret_proof()
-        self.requests.params.update(params)
+        # params = {
+        #     'access_token': self.access_token
+        # }
+        # if app_secret:
+        #     params['appsecret_proof'] = self._gen_appsecret_proof()
+        # self.requests.params.update(params)
 
         if self.proxies:
             self.requests.proxies.update(self.proxies)
@@ -47,7 +47,7 @@ class FxiaokeSession(object):
 
         resp = self.requests.post(url, json=payload)
         data = resp.json()
-        if data['errorCode'] = 0:
+        if data['errorCode'] == 0:
             self.corpAccessToken = data['corpAccessToken']
             self.corpId = data['corpId']
             self.token_expired = time.time() + data['expiresIn'] - 30

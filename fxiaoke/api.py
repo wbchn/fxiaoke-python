@@ -27,6 +27,7 @@ class FxiaokeApi(object):
         self._num_requests_attempted = 0
         self._api_version = api_version or self.API_VERSION
         self._enable_debug_logger = enable_debug_logger
+        self._last_response = None
 
     def get_num_requests_attempted(self):
         """Returns the number of calls attempted."""
@@ -35,6 +36,10 @@ class FxiaokeApi(object):
     def get_num_requests_succeeded(self):
         """Returns the number of calls that succeeded."""
         return self._num_requests_succeeded
+
+    def get_last_response(self):
+        """Returns the last requests calls, for developer."""
+        return self._last_response
 
     @classmethod
     def init(
@@ -52,9 +57,24 @@ class FxiaokeApi(object):
         session = FxiaokeSession(app_id, app_secret, permanent_code, proxies,
                                  timeout)
         api = cls(session, api_version, enable_debug_logger=debug)
-        cls._default_api = api
+        cls.set_default_api(api)
         cls._open_user_id = open_user_id
         return api
+
+    @classmethod
+    def set_default_api(cls, api_instance):
+        """Sets the default api instance.
+        When making calls to the api, objects will revert to using the default
+        api if one is not specified when initializing the objects.
+        Args:
+            api_instance: The instance which to set as default.
+        """
+        cls._default_api = api_instance
+
+    @classmethod
+    def get_default_api(cls):
+        """Returns the default api instance."""
+        return cls._default_api
 
     def call(
         self,
@@ -92,14 +112,23 @@ class FxiaokeApi(object):
         token = self._session.fresh_token()
         params.update({"currentOpenUserId": self._open_user_id, **token})
 
-        response = self._session.requests.request(
-            method,
-            path,
-            data=params,
-            headers=headers,
-            files=files,
-            timeout=self._session.timeout
-        )
+        try:
+            response = self._session.requests.request(
+                method,
+                path,
+                json=params,
+                headers=headers,
+                files=files,
+                timeout=self._session.timeout
+            )
+        except KeyboardInterrupt as e:
+            raise e
+        except Exception as e:
+            logger.exception(e)
+            logger.warning(f'{method}: {path}, with {params}, headers:{headers}')
+            raise e
+        
+        self._last_response = response
         if self._enable_debug_logger:
             import curlify
             print(curlify.to_curl(response.request))
@@ -122,13 +151,16 @@ class Cursor(object):
     def __init__(
         self,
         source_object=None,
-        fields=None,
         params=None,
         api=None,
+        node_id=None,
+        endpoint=None,
     ):
         self.params = dict(params or {})
         self._source_object = source_object
         self._api = api or source_object.get_api()
+        self._node_id = node_id or source_object.get_id_assured()
+        self._endpoint = endpoint or source_object.get_endpoint()
         self._path = (
             self._node_id,
             self._endpoint,
@@ -166,11 +198,15 @@ class Cursor(object):
         if self._finished_iteration:
             return False
 
+        logger.debug(f'Request url: {self._path}')
+        logger.debug(f' with payload: {self.params}')
+
         response: dict = self._api.call(
-            'GET',
+            'POST',
             self._path,
             params=self.params,
         )
+
 
         if (
             'total' in response and
@@ -189,6 +225,8 @@ class Cursor(object):
             'total' in response
         ):
             self._total_count = response['total']
+        logger.info(
+            f'response: {response.get("offset")}+{response.get("limit")}/{response.get("total")}.')
 
         self._queue = response['dataList']
         return len(self._queue) > 0
@@ -207,47 +245,74 @@ class Request(object):
         method,
         endpoint,
         api=None,
-        param_checker=TypeChecker({}, {}),
-        target_class=None,
         api_type=None,
-        allow_file_upload=False,
         response_parser=None,
         include_summary=True,
-        api_version=None,
     ):
 
         self._api = api or FxiaokeApi.get_default_api()
         self._method = method
+        self._node_id = node_id
         self._endpoint = endpoint.replace('/', '')
         self._path = (node_id, endpoint.replace('/', ''))
-        self._param_checker = param_checker
-        self._target_class = target_class
         self._api_type = api_type
-        self._allow_file_upload = allow_file_upload
         self._response_parser = response_parser
         self._include_summary = include_summary
-        self._api_version = api_version
         self._params = {}
         self._fields = []
         self._file_params = {}
         self._file_counter = 0
         self._accepted_fields = []
-        if target_class is not None:
-            self._accepted_fields = target_class.Field.__dict__.values()
 
     def execute(self):
         params = copy.deepcopy(self._params)
-        if self._fields:
-            params['fields'] = ','.join(self._fields)
-        if self._api_type == "EDGE" and self._method == "GET":
-            cursor = Cursor(
-                target_objects_class=self._target_class,
-                params=params,
-                fields=self._fields,
-                include_summary=self._include_summary,
-                api=self._api,
-                node_id=self._node_id,
-                endpoint=self._endpoint,
-            )
-            cursor.load_next_page()
-            return cursor
+        # if self._fields:
+        #     params['fields'] = ','.join(self._fields)
+        cursor = Cursor(
+            params=params,
+            api=self._api,
+            node_id=self._node_id,
+            endpoint=self._endpoint,
+        )
+        cursor.load_next_page()
+        return cursor
+
+    def add_field(self, field):
+        self._fields.append(field)
+        # if field not in self._fields:
+        #     self._fields.append(field)
+        # if field not in self._accepted_fields:
+        #     logger.warning(self._endpoint + ' does not allow field ' + field)
+        return self
+
+    def add_fields(self, fields):
+        if fields is None:
+            return self
+        for field in fields:
+            self.add_field(field)
+        return self
+
+    def get_fields(self):
+        return list(self._fields)
+
+    def add_param(self, key, value):
+        self._params[key] = value
+        # if not self._param_checker.is_valid_pair(key, value):
+        #     api_utils.warning('value of ' + key + ' might not be compatible. ' +
+        #         ' Expect ' + self._param_checker.get_type(key) + '; ' +
+        #         ' got ' + str(type(value)))
+        # if self._param_checker.is_file_param(key):
+        #     self._file_params[key] = value
+        # else:
+        #     self._params[key] = self._extract_value(value)
+        return self
+
+    def add_params(self, params):
+        if params is None:
+            return self
+        for key in params.keys():
+            self.add_param(key, params[key])
+        return self
+
+    def get_params(self):
+        return copy.deepcopy(self._params)
