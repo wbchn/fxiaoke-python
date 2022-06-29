@@ -207,7 +207,6 @@ class Cursor(object):
             params=self.params,
         )
 
-
         if (
             'total' in response and
             'offset' in response and
@@ -225,8 +224,8 @@ class Cursor(object):
             'total' in response
         ):
             self._total_count = response['total']
-        logger.info(
-            f'response: {response.get("offset")}+{response.get("limit")}/{response.get("total")}.')
+            logger.info(
+                f'response: {response.get("offset")}+{response.get("limit")}/{response.get("total")}.')
 
         self._queue = response['dataList']
         return len(self._queue) > 0
@@ -250,7 +249,7 @@ class Request(object):
         include_summary=True,
     ):
 
-        self._api = api or FxiaokeApi.get_default_api()
+        self._api: FxiaokeApi = api or FxiaokeApi.get_default_api()
         self._method = method
         self._node_id = node_id
         self._endpoint = endpoint.replace('/', '')
@@ -266,16 +265,23 @@ class Request(object):
 
     def execute(self):
         params = copy.deepcopy(self._params)
-        # if self._fields:
-        #     params['fields'] = ','.join(self._fields)
-        cursor = Cursor(
+
+        if self._endpoint in ('query', ):
+            cursor = Cursor(
+                params=params,
+                api=self._api,
+                node_id=self._node_id,
+                endpoint=self._endpoint,
+            )
+            cursor.load_next_page()
+            return cursor
+        
+        response = self._api.call(
+            method='POST',
+            path=(self._node_id, self._endpoint),
             params=params,
-            api=self._api,
-            node_id=self._node_id,
-            endpoint=self._endpoint,
         )
-        cursor.load_next_page()
-        return cursor
+        return response
 
     def add_field(self, field):
         self._fields.append(field)

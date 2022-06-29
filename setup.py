@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name='fxiaoke-python',
-    version="0.0.1",
+    version="0.0.2",
     description='fxiaoke CRM(ShareCRM) api.',
     long_description=long_description,
     long_description_content_type='text/markdown',
